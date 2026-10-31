@@ -1,604 +1,236 @@
+<div align="center">
+
 # AIrPPG
 
-AIrPPG là dự án thực nghiệm rPPG đa ROI để ước lượng nhịp tim từ video RGB khuôn mặt. Pipeline hiện tại được tổ chức theo từng task:
+**Lightweight, multi-region remote photoplethysmography for heart-rate estimation from facial RGB video**
 
-- **Task 1 - Preprocessing**: đọc video UBFC-rPPG, detect Face Mesh, tạo ROI trán/má trái/má phải, giữ timeline và lưu artifact frame/ROI/ground truth.
-- **Task 2 - Signal extraction**: đọc output Task 1, trích xuất RGB/rPPG theo ROI, chạy Green/CHROM/POS, align ground truth và tạo baseline metric.
-- **Task 3 - Multi-ROI fusion**: đọc output Task 2, so sánh single ROI, average fusion và quality-weighted fusion; đây là task hiện đã có report chi tiết.
-- **Task 4 - Lightweight model**: task kế tiếp, dùng signal/window từ Task 2/3 để huấn luyện mô hình nhẹ như Tiny CNN hoặc TCN và so sánh với baseline truyền thống/fusion.
+[![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![OpenCV](https://img.shields.io/badge/OpenCV-Video%20Processing-27354A?logo=opencv&logoColor=white)](src/airppg/)
+[![MediaPipe](https://img.shields.io/badge/MediaPipe-Face%20Mesh-27354A)](src/airppg/preprocessing/roi.py)
+[![Research](https://img.shields.io/badge/Status-Experimental-167D86)](#project-status)
+[![License](https://img.shields.io/badge/License-MIT-27354A)](LICENSE)
 
-Dataset chính: **UBFC-rPPG**. Dataset không được commit vào repository.
+**[Results](#experimental-results) · [Reports](#reports-and-visualizations) · [Getting started](#getting-started) · [Methodology](#methodology) · [Limitations](#limitations)**
+
+</div>
 
 ---
 
-## 1. Cài đặt môi trường bằng `uv`
+## Overview
 
-Dự án dùng **Python 3.11** và [`uv`](https://docs.astral.sh/uv/) để quản lý môi trường.
+**AIrPPG** investigates whether combining multiple facial regions improves camera-based heart-rate estimation without contact sensors. The system processes RGB face videos, extracts pulse-related color changes from the **forehead, left cheek, and right cheek**, and compares classical remote photoplethysmography (rPPG) methods under a consistent evaluation protocol.
 
-### Cài `uv` trên Windows PowerShell
+The current implementation is an **experimental, notebook-driven research pipeline**, not a live webcam application or a trained deep-learning system. It includes:
 
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+- Face Mesh landmarks, per-frame ROI polygons/masks, and explicit invalid-frame handling.
+- Dataset-aware ground-truth parsing and portable, versioned artifacts.
+- **Green, CHROM, and POS** signal extraction and frequency-domain HR estimation.
+- **Single-region**, **simple-average**, and **quality-weighted** multi-ROI comparisons.
+- Per-recording evaluation, aggregate metrics, figures, and detailed experiment reports.
+
+The research uses **UBFC-rPPG**, including both `DATASET_1` and `DATASET_2`. Original videos and ground-truth files must be obtained separately from the dataset provider.
+
+## Experimental results
+
+**Snapshot of the committed Task 3 experiment:** 49 processed recordings (**39 train / 5 validation / 5 test**), 0 failed across the preprocessing, signal-extraction, and fusion manifests. The test split contains **206 HR windows** across five recordings.
+
+The table uses `outputs/fusion/fusion_aggregate_summary.csv`. MAE, RMSE, and Pearson `r` are **arithmetic means of the per-recording metrics**, not metrics recomputed after pooling every window across recordings.
+
+| Method | ROI strategy | Test MAE ↓ (BPM) | Test RMSE ↓ (BPM) | Pearson r ↑ |
+|:---|:---|---:|---:|---:|
+| Green | Best single ROI (left cheek) | 13.82 | 17.82 | 0.348 |
+| Green | **Average fusion** | **10.24** | **12.09** | **0.519** |
+| Green | Quality-weighted fusion | 11.69 | 15.59 | 0.407 |
+| POS | Best single ROI (forehead) | 1.80 | 2.33 | 0.423 |
+| POS | Average fusion | 1.66 | 2.12 | **0.467** |
+| POS | **Quality-weighted fusion** | **1.64** | **2.10** | 0.466 |
+| CHROM | Average fusion | 48.66 | 48.81 | -0.284 |
+| CHROM | Quality-weighted fusion | 48.32 | 48.48 | -0.319 |
+
+<div align="center">
+  <img src="report/assets/task3_test_mae.png" alt="Test-set MAE: single ROI versus fusion strategies for Green, CHROM and POS" width="90%" />
+  <sub>Test MAE comparison from the <a href="report/task3_fusion_report.html">Task 3 report</a>.</sub>
+</div>
+
+**What the results support**
+
+1. **Average fusion helps Green and POS** compared with their best single-ROI alternatives on this test split. For Green, MAE decreases from 13.82 to 10.24 BPM.
+2. **POS is the strongest classical baseline in the current experiment.** Quality weighting changes test MAE only from 1.66 to 1.64 BPM relative to averaging. This very small improvement is **not evidence of a reliable general advantage**.
+3. **Hand-crafted quality weighting is not consistently beneficial.** It degrades Green versus simple averaging, and CHROM remains inaccurate under the current pipeline.
+4. The Task 2 `signal_extraction_baseline` **already averages ROI signals**. It is a reproduction/reference check, **not an independent single-ROI baseline**.
+
+These are **results for this repository's UBFC split and protocol**, not performance guarantees for arbitrary webcams, motion, lighting, skin tones, or clinical use. Validation errors are substantially higher in parts of the experiment; see the full reports before drawing generalization claims.
+
+**Data:** [Fusion aggregate CSV](outputs/fusion/fusion_aggregate_summary.csv) · [Per-recording fusion metrics](outputs/fusion/fusion_metrics_summary.csv) · [Task 2 metrics](outputs/signal_extraction/signal_extraction_metrics_summary.csv)
+
+## Methodology
+
+```text
+UBFC-rPPG RGB videos + reference heart rate
+                 |
+                 v
+1. Preprocessing (01_preprocessing.ipynb)
+   MediaPipe Face Mesh -> forehead / cheeks -> ROI masks
+   Frame validity + timestamps + normalized ground truth
+                 |
+                 v
+2. Signal extraction (02_signal_extraction.ipynb)
+   ROI mean RGB -> detrend / band-pass -> Green / CHROM / POS
+   Sliding-window FFT -> predicted HR -> aligned ground truth
+                 |
+                 v
+3. Multi-ROI fusion (03_fusion.ipynb)
+   Single ROI | Average fusion | Quality-weighted fusion
+   Quality features, ROI weights, fused HR, evaluation
+                 |
+                 v
+   CSV/JSON/NPZ artifacts + visualizations + HTML reports
 ```
 
-Sau khi cài xong, mở lại terminal và kiểm tra:
+### 1. Preprocessing
 
-```powershell
-uv --version
-```
+The first notebook reads video metadata and uses **MediaPipe Face Mesh** to locate facial landmarks. Three predefined polygons are converted into pixel masks. Processed frames preserve their original frame indices; invalid frames are recorded with validity flags and failure reasons instead of being silently dropped. Ground truth is normalized separately for UBFC `DATASET_1` and `DATASET_2`.
 
-### Cài dependency của dự án
+**Output:** `outputs/preprocessing/preprocessing_dataset_manifest.json`, per-sample `roi_data.npz`, `metadata.json`, `ground_truth.npz` and ROI overlays.
 
-Từ thư mục gốc repository:
+### 2. Classical rPPG extraction
 
-```powershell
-uv sync
-```
+Each valid ROI produces a mean RGB trace. The pipeline interpolates missing signal values when needed, detrends, band-pass filters, and evaluates three classical methods:
 
-Nếu cần chạy test/dev tools:
+| Baseline | Approach |
+|:---|:---|
+| **Green** | Pulse estimation from the green color channel |
+| **CHROM** | Chrominance-based pulse projection |
+| **POS** | Plane-orthogonal-to-skin pulse projection |
 
-```powershell
+Heart rate is estimated using the dominant spectral peak in sliding FFT windows and aligned with reference HR timestamps.
+
+**Configured experiment:** 30-second windows, 1-second step, 42–210 BPM search range. **Output:** `outputs/signal_extraction/signal_extraction_dataset_manifest.json` and per-sample signals/metrics.
+
+### 3. Multi-ROI fusion
+
+Fusion consumes **Task 2 artifacts**, so it does not need to process raw videos a second time. It compares:
+
+- **Single ROI:** independent HR from forehead, left cheek and right cheek.
+- **Average fusion:** equal-weight averaging of the three ROI signals.
+- **Quality-weighted fusion:** per-method, per-window weights derived from valid-frame ratio, signal variability, spectral peak clarity, SNR-like score, and disagreement between ROI estimates.
+
+Weights are nonnegative and normalized to sum to one, with a fallback for invalid or degenerate scores. Signals from overlapping windows are combined to form a continuous fused trace. The output includes per-ROI predictions, fused predictions, feature vectors, weights, metrics and visualizations.
+
+**Output:** `outputs/fusion/fusion_manifest.json`, `fusion_signals.npz`, per-sample metric files and aggregate tables.
+
+## Reports and visualizations
+
+The repository includes two detailed **HTML experiment reports**. Download or open these locally to view their full commentary and figures.
+
+| Report | Contents |
+|:---|:---|
+| **[Task 2 — Signal Extraction & Classical Baselines](report/task2_signal_extraction_report.html)** | Green/CHROM/POS, train/validation/test metrics, MAE/RMSE/Pearson/SNR interpretation and failure discussion |
+| **[Task 3 — Multi-ROI Fusion](report/task3_fusion_report.html)** | Single-region vs average vs quality-weighted strategies, ROI weight behavior, test comparison and limitations |
+
+<div align="center">
+  <img src="report/assets/task2_test_baselines.png" alt="Task 2 classical rPPG baseline comparison on test recordings" width="48%" />
+  <img src="report/assets/task3_test_rmse_pearson.png" alt="Task 3 test RMSE and Pearson correlation comparisons" width="48%" />
+</div>
+
+Additional artifacts: [Task 2 MAE by split](report/assets/task2_mae_by_split.png) · [Example HR traces and ROI weights](report/assets/task3_sample_visualization.png) · [Research plan](docs/task.md) · [Research proposal](docs/rppg_research_proposal.docx)
+
+## Getting started
+
+### Prerequisites
+
+- **Python 3.11** (required by `pyproject.toml`; the project specifies `>=3.11,<3.12`).
+- [`uv`](https://docs.astral.sh/uv/) for dependency and environment management.
+- [UBFC-rPPG](https://sites.google.com/view/ybenezeth/ubfcrppg) videos and reference signals for rerunning Task 1 and Task 2.
+
+### Install and test
+
+```bash
+git clone https://github.com/duc-vu/lightweight-rppg.git
+cd lightweight-rppg
+
 uv sync --extra dev
-```
-
-Nếu workspace nằm trong đường dẫn Unicode trên Windows và `uv run` không import được `airppg`, cài project dạng wheel thay vì editable:
-
-```powershell
-uv sync --extra dev --no-editable
-```
-
-### Mở Jupyter Lab
-
-```powershell
+uv run pytest
 uv run jupyter lab
 ```
 
-Notebook tự tìm project root và thêm `src/` vào `sys.path`, nên có thể chạy khi Jupyter đang đứng ở repo root hoặc trực tiếp trong thư mục `notebooks/`.
+If an editable installation fails on a Windows path containing non-ASCII characters, the existing project documentation suggests:
 
-Notebook chính:
-
-```text
-notebooks/01_preprocessing.ipynb
-notebooks/02_signal_extraction.ipynb
-notebooks/03_fusion.ipynb
+```bash
+uv sync --extra dev --no-editable
 ```
 
----
+### Prepare the dataset
 
-## 2. Dataset UBFC-rPPG
-
-Đặt dataset cục bộ dưới thư mục:
+Put the **original UBFC files** under the following structure; raw videos are not bundled with the repository.
 
 ```text
 datasets/UBFC_DATASET/
-  DATASET_1/
-    10-gt/
-      vid.avi
-      gtdump.xmp
-    11-gt/
-      vid.avi
-      gtdump.xmp
-    ...
-  DATASET_2/
-    subject1/
-      vid.avi
-      ground_truth.txt
-    subject2/
-      vid.avi
-      ground_truth.txt
-    ...
+├── DATASET_1/
+│   └── 10-gt/
+│       ├── vid.avi
+│       └── gtdump.xmp
+└── DATASET_2/
+    └── subject1/
+        ├── vid.avi
+        └── ground_truth.txt
 ```
 
-Các file dataset, frame trích xuất, video overlay và artifact trung gian nằm trong `datasets/` hoặc `outputs/` và không nên commit vào git.
+Other recording folders follow the same layouts. The preprocessing notebook discovers videos recursively. Keep dataset files on your local machine and comply with the dataset provider's terms.
 
-## 3. Task 1 - Preprocessing
+### Run the notebooks in order
 
-Task 1 tạo dữ liệu đầu vào ổn định cho toàn bộ pipeline. Notebook chính:
+1. [`01_preprocessing.ipynb`](notebooks/01_preprocessing.ipynb) — face landmarks, ROI masks and normalized reference data.
+2. [`02_signal_extraction.ipynb`](notebooks/02_signal_extraction.ipynb) — mean RGB, Green/CHROM/POS, sliding-window HR and metrics.
+3. [`03_fusion.ipynb`](notebooks/03_fusion.ipynb) — single ROI and fusion experiments, metrics and figures.
+
+The notebooks locate the repository root and add `src/` to the Python import path. They write versioned manifests with relative paths so that later stages can consume earlier artifacts. **Task 2 requires access to original videos** for RGB extraction; **Task 3 can run from the saved Task 2 artifacts**.
+
+Some generated experimental artifacts are already committed under `outputs/`; this makes the repository relatively large. Re-running the earlier notebooks may replace generated outputs.
+
+### Check the stored experiment
+
+```bash
+uv run python -c "import json; from pathlib import Path; p=Path('outputs/fusion/fusion_manifest.json'); print(json.loads(p.read_text(encoding='utf-8'))['counts'])"
+```
+
+Expected for the currently committed experiment: `{'total': 49, 'processed': 49, 'failed': 0}`.
+
+The test suite in [`tests/test_core.py`](tests/test_core.py) exercises ground-truth parsing, paths/splits, ROI handling, signal processing, baseline shapes, fusion weights and artifact schemas. It is a set of **unit/synthetic-data checks**, not proof of clinical validity.
+
+## Repository map
 
 ```text
-notebooks/01_preprocessing.ipynb
+docs/                        Research proposal and project plan
+notebooks/                   The three executable experiment stages
+src/airppg/preprocessing/    Dataset discovery, ROI and ground truth
+src/airppg/signal_extraction/ RGB extraction and classical rPPG methods
+src/airppg/fusion/           ROI quality, strategies and evaluation
+src/airppg/signal.py         Signal processing and HR estimation
+src/airppg/metrics.py        Ground-truth alignment and metrics
+outputs/                     Versioned manifests and generated artifacts
+report/                      Task 2/3 HTML reports and figures
+tests/                       Unit tests on synthetic fixtures
 ```
 
-Luồng xử lý tóm tắt:
-
-1. Đọc video UBFC-rPPG và metadata: FPS, frame count, resolution, duration.
-2. Detect Face Mesh landmarks bằng MediaPipe.
-3. Tạo 3 ROI cố định: `forehead`, `left_cheek`, `right_cheek`.
-4. Tạo polygon/mask ROI theo từng frame.
-5. Giữ nguyên timeline: frame lỗi không bị drop, mà được đánh dấu `valid = False` và có `error_reasons`.
-6. Chuẩn hóa UBFC ground truth thành artifact riêng để Task 2 không phải parse raw dataset.
-7. Lưu overlay PNG để kiểm tra ROI bằng mắt.
-
-Output chính:
-
-```text
-outputs/preprocessing/
-  preprocessing_dataset_manifest.json
-  train|val|test/
-    <sample_id>/
-      roi_data.npz
-      metadata.json
-      ground_truth.npz
-      overlay_samples/
-```
-
-Các key quan trọng:
-
-| File | Key/trường | Ý nghĩa |
-| --- | --- | --- |
-| `preprocessing_dataset_manifest.json` | `items[*].outputs` | Entrypoint cho Task 2. |
-| `roi_data.npz` | `frame_indices`, `landmarks_px`, `roi_polygons_px`, `roi_masks`, `valid`, `error_reasons`, `roi_names` | ROI/frame-level artifact. |
-| `metadata.json` | video metadata, config, ROI names, failure counts | Audit trail của preprocessing. |
-| `ground_truth.npz` | `timestamps`, `heart_rate_bpm`, `ppg_signal`, `ppg_timestamps`, `spo2_percent` | Ground truth đã chuẩn hóa. |
-
-Task 1 hoàn thành khi toàn bộ sample xử lý được, manifest dùng path tương đối, ROI overlay nhìn hợp lý, và frame lỗi vẫn có record rõ ràng.
-
----
-
-## 4. Task 2 - Signal extraction và classical baselines
-
-Task 2 đọc output Task 1, trích xuất tín hiệu RGB/rPPG theo ROI, chạy Green/CHROM/POS và tạo baseline metric cho Task 3. Notebook chính:
-
-```text
-notebooks/02_signal_extraction.ipynb
-```
-
-Luồng xử lý tóm tắt:
-
-1. Đọc `outputs/preprocessing/preprocessing_dataset_manifest.json`.
-2. Với mỗi sample `processed`, load `roi_data.npz`, `metadata.json`, `ground_truth.npz` và video nguồn.
-3. Tính mean RGB theo `forehead`, `left_cheek`, `right_cheek`.
-4. Giữ timeline: frame invalid vẫn tồn tại, signal lỗi là `NaN`.
-5. Tiền xử lý signal: fill/interpolate NaN khi cần, detrend, bandpass HR band, z-score.
-6. Chạy baseline Green, CHROM, POS.
-7. Ước lượng HR theo sliding FFT window, align với ground truth, tính metric.
-8. Lưu artifact và visualization.
-
-Output chính:
-
-```text
-outputs/signal_extraction/
-  signal_extraction_dataset_manifest.json
-  signal_extraction_metrics_summary.csv
-  train|val|test/
-    <sample_id>/
-      signals.npz
-      metadata.json
-      metrics.json
-      metrics.csv
-      visualization.png
-```
-
-`signals.npz` là input quan trọng nhất cho Task 3:
-
-| Key | Shape | Ý nghĩa |
-| --- | --- | --- |
-| `timestamps` | `(N,)` | Timeline frame-level. |
-| `valid` | `(N,)` | Frame validity từ Task 1. |
-| `roi_names` | `(3,)` | `forehead`, `left_cheek`, `right_cheek`. |
-| `method_names` | `(3,)` | `green`, `chrom`, `pos`. |
-| `mean_rgb` | `(N, 3, 3)` | RGB trung bình theo frame, ROI, channel. |
-| `rppg_signals` | `(N, 3)` | rPPG baseline đã average ROI theo từng method. |
-| `rppg_roi_signals` | `(3, N, 3)` | rPPG theo method, frame, ROI. |
-| `hr_timestamps` | `(W,)` | Tâm sliding window. |
-| `hr_estimates` | `(W, 3)` | HR baseline Task 2. Lưu ý: đã average ROI, không phải single ROI. |
-| `gt_aligned_to_hr` | `(W,)` | Ground truth HR đã align với window. |
-
-Metric Task 2:
-
-| Metric | Ý nghĩa |
-| --- | --- |
-| `mae_bpm` | Sai số tuyệt đối trung bình, càng thấp càng tốt. |
-| `rmse_bpm` | Phạt lỗi lớn mạnh hơn MAE, càng thấp càng tốt. |
-| `pearson_r` | Tương quan trend giữa estimate và ground truth, càng cao càng tốt. |
-| `bias_bpm` | Sai lệch trung bình `estimate - GT`. |
-| `snr_db` | Độ rõ tín hiệu HR band so với nhiễu. |
-
-Report hiện có:
-
-```text
-report/task2_signal_extraction_report.html
-report/assets/task2_test_baselines.png
-report/assets/task2_mae_by_split.png
-```
-
-Kết luận hiện tại: POS là baseline Task 2 tốt nhất trên test split; Green dùng được nhưng kém hơn POS; CHROM có lỗi cao trong protocol hiện tại.
-
----
-
-## 5. Task 3 - Multi-ROI fusion
-
-Task 3 tập trung vào **fusion đa ROI**: kiểm tra việc kết hợp trán, má trái và má phải có cải thiện kết quả so với từng ROI riêng lẻ hay không.
-
-Task 3 chạy trực tiếp trong notebook:
-
-```text
-notebooks/03_fusion.ipynb
-```
-
-Entrypoint mặc định là:
-
-```text
-outputs/signal_extraction/signal_extraction_dataset_manifest.json
-```
-
-### Mục tiêu Task 3
-
-So sánh các chiến lược:
-
-1. **Single-ROI baseline**
-
-   - Dùng từng ROI riêng lẻ: `forehead`, `left_cheek`, `right_cheek`.
-   - Ước lượng HR riêng cho từng ROI.
-   - Đánh giá ROI nào ổn định hơn theo từng sample/window.
-2. **Average fusion**
-
-   - Gộp tín hiệu ROI bằng trung bình đơn giản.
-   - Đây là baseline fusion dễ hiểu, không cần quality score.
-3. **Quality-weighted fusion**
-
-   - Tính quality score cho từng ROI/window.
-   - Gán trọng số cao hơn cho ROI có tín hiệu tốt hơn.
-   - Chuẩn hóa trọng số để tổng weight của các ROI bằng 1.
-
-Task 3 cần trả lời:
-
-- Multi-ROI fusion có tốt hơn single ROI không?
-- Average fusion có đủ tốt không, hay cần quality-weighted fusion?
-- ROI nào thường đáng tin nhất trên UBFC?
-- Khi một ROI bị nhiễu, bị che hoặc ánh sáng kém, fusion có giảm lỗi không?
-- Quality features nào tương quan tốt với lỗi HR thực tế?
-
-### Input Task 3
-
-Task 3 đọc từ mỗi `signals.npz` của Signal extraction:
-
-| Input                | Cách dùng                                                                         |
-| -------------------- | ----------------------------------------------------------------------------------- |
-| `rppg_roi_signals` | Input chính cho fusion. Shape `(3, N, 3)` tương ứng `(method, frame, roi)`. |
-| `roi_names`        | Thứ tự ROI, ví dụ `forehead`, `left_cheek`, `right_cheek`.                |
-| `method_names`     | Thứ tự method, ví dụ `green`, `chrom`, `pos`.                             |
-| `timestamps`       | Timeline frame-level.                                                               |
-| `valid`            | Mask frame hợp lệ từ Preprocessing.                                                     |
-| `hr_timestamps`    | Timeline window-level cho HR estimate.                                              |
-| `gt_aligned_to_hr` | Ground truth HR đã align theo `hr_timestamps`.                                  |
-| `hr_estimates`     | HR từ Task 2. Lưu ý: đây là baseline đã trung bình 3 ROI, không phải single-ROI baseline. |
-| `mean_rgb`         | Có thể dùng để tính motion/color quality bổ sung nếu cần.                  |
-
-Task 3 không cần đọc raw video hoặc raw UBFC ground truth nếu Signal extraction đã chạy đúng.
-
-`signal_extraction_baseline` trong Task 3 chỉ dùng để kiểm tra Task 3 tái tạo đúng baseline Task 2. So sánh chính để trả lời câu hỏi nghiên cứu là `single_*` vs `average_fusion` vs `quality_weighted_fusion`.
-
-### Quality features
-
-Mỗi ROI/window/method có vector quality features với tên cố định:
-
-| Feature                             | Ý nghĩa                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------------- |
-| `valid_ratio`                     | Tỷ lệ frame hợp lệ trong window.                                      |
-| `signal_std`                      | Độ lệch chuẩn của ROI signal trong window.                            |
-| `dominant_power_ratio`            | Peak HR-band FFT power chia cho median HR-band power.                  |
-| `snr_like_db`                     | `10*log10(signal_power/(noise_power+1e-12))` quanh dominant peak ±0.1 Hz. |
-| `inter_roi_disagreement_bpm`      | Lệch tuyệt đối giữa ROI HR và median HR của các ROI cùng method/window. |
-
-Quality score dùng min-max normalize theo ROI cho từng `(window, method)`:
-
-```text
-score = 0.35 * snr_norm
-      + 0.25 * clarity_norm
-      + 0.20 * valid_ratio
-      + 0.10 * std_norm
-      - 0.10 * disagreement_norm
-```
-
-Edge cases:
-
-- ROI có `valid_ratio < 0.8` hoặc score không hữu hạn được gán score 0.
-- Score được clip về không âm và normalize để weight hữu hạn, không âm, tổng bằng 1.
-- Nếu toàn bộ score bằng 0, fallback về uniform weight trên ROI có `valid_ratio >= 0.8`; nếu không có ROI hợp lệ, dùng uniform trên toàn bộ ROI.
-
-### Output Task 3
-
-```text
-outputs/fusion/
-  fusion_manifest.json
-  fusion_metrics_summary.csv
-  fusion_aggregate_summary.csv
-  train/
-    <sample_id>/
-      fusion_signals.npz
-      fusion_metrics.json
-      fusion_metrics.csv
-      fusion_visualization.png
-  val/
-    <sample_id>/
-      fusion_signals.npz
-      fusion_metrics.json
-      fusion_metrics.csv
-      fusion_visualization.png
-  test/
-    <sample_id>/
-      fusion_signals.npz
-      fusion_metrics.json
-      fusion_metrics.csv
-      fusion_visualization.png
-```
-
-Schema version: `fusion_v1`.
-
-### `fusion_signals.npz`
-
-| Key                            | Shape        | Ý nghĩa                                                      |
-| ------------------------------ | ------------ | -------------------------------------------------------------- |
-| `schema_version`             | scalar       | `fusion_v1`.                                                  |
-| `sample_id`                  | scalar       | ID sample.                                                     |
-| `split`                      | scalar       | Split dữ liệu.                                               |
-| `timestamps`                 | `(N,)`       | Timeline frame-level.                                         |
-| `valid`                      | `(N,)`       | Frame validity từ preprocessing.                              |
-| `roi_names`                  | `(3,)`       | Thứ tự ROI.                                                   |
-| `method_names`               | `(3,)`       | Thứ tự method: `green`, `chrom`, `pos`.                       |
-| `fusion_strategy_names`      | `(6,)`       | `single_*`, `average_fusion`, `quality_weighted_fusion`, `signal_extraction_baseline`. |
-| `feature_names`              | `(5,)`       | Tên quality features.                                         |
-| `hr_timestamps`              | `(W,)`       | Timeline window-level.                                        |
-| `gt_aligned_to_hr`           | `(W,)`       | Ground truth HR theo window.                                  |
-| `baseline_hr`                | `(W, 3)`     | HR baseline từ Task 2; baseline này đã average ROI.            |
-| `single_roi_hr`              | `(W, 3, 3)`  | HR theo `(window, method, roi)`.                              |
-| `average_fusion_hr`          | `(W, 3)`     | HR sau average fusion theo method.                            |
-| `weighted_fusion_hr`         | `(W, 3)`     | HR sau quality-weighted fusion theo method.                   |
-| `roi_quality_features`       | `(W, 3, 3, 5)` | Quality features theo `(window, method, roi, feature)`.     |
-| `roi_weights`                | `(W, 3, 3)`  | Method-specific ROI weights.                                  |
-| `average_fused_rppg_signals` | `(N, 3)`     | Frame-level average-fused rPPG theo method.                   |
-| `weighted_fused_rppg_signals` | `(N, 3)`    | Frame-level quality-weighted rPPG theo method.                |
-
-### Metrics cần báo cáo
-
-Task 3 phải so sánh chính:
-
-- single ROI `forehead`
-- single ROI `left_cheek`
-- single ROI `right_cheek`
-- average fusion
-- quality-weighted fusion
-
-`signal_extraction_baseline` được báo cáo riêng như baseline Task 2 đã average ROI; không dùng nó thay cho single-ROI baseline.
-
-Metric:
-
-- MAE BPM
-- RMSE BPM
-- Pearson correlation
-- bias BPM
-- SNR dB nếu có fused signal
-
-Nên báo cáo theo:
-
-- từng sample
-- từng split
-- tổng hợp riêng trên `test`
-
-### Visualization cần có
-
-Mỗi sample hoặc một nhóm sample đại diện nên có:
-
-- HR theo từng ROI so với ground truth.
-- HR của average fusion và weighted fusion so với ground truth.
-- Weight của từng ROI theo thời gian/window.
-- Quality features theo thời gian/window.
-- Bar chart metric so sánh single ROI vs fusion.
-
-### Tiêu chí hoàn thành Task 3
-
-Task 3 chỉ nên xem là hoàn thành khi:
-
-- Đọc được `outputs/signal_extraction/signal_extraction_dataset_manifest.json`.
-- Load được `rppg_roi_signals`, `hr_timestamps`, `gt_aligned_to_hr`, `roi_names`, `method_names`.
-- Tính được HR riêng cho từng ROI hoặc dùng được ROI-level signal để tạo HR theo ROI/window.
-- Có average fusion.
-- Có quality-weighted fusion với weight hữu hạn, không âm, tổng bằng 1.
-- Có xử lý fallback khi quality score không hợp lệ.
-- So sánh single ROI vs average fusion vs quality-weighted fusion.
-- Xuất manifest, `.npz`, metrics `.json/.csv` và visualization.
-- Có kết quả tổng hợp trên `test` split.
-
-### Trạng thái output hiện tại
-
-Task 3 hiện đã xử lý đủ toàn bộ 49 sample từ Signal extraction:
-
-| Hạng mục | Giá trị |
-| --- | --- |
-| Source processed items từ Task 2 | 49 |
-| Fusion processed / failed | 49 / 0 |
-| Split count | train 39, val 5, test 5 |
-| Per-sample metric rows | 882 = 49 samples × 3 methods × 6 strategies |
-| Aggregate rows | 54 = 3 splits × 3 methods × 6 strategies |
-
-Report hiện có:
-
-```text
-report/task3_fusion_report.html
-report/assets/task3_test_mae.png
-report/assets/task3_test_rmse_pearson.png
-report/assets/task3_sample_visualization.png
-```
-
-Kết luận hiện tại: average fusion có ích rõ với Green/POS so với single ROI; quality-weighted fusion chỉ nhỉnh hơn average rất nhẹ với POS và chưa ổn định với Green/CHROM. `signal_extraction_baseline` gần trùng `average_fusion` vì baseline Task 2 đã average ROI.
-
----
-
-## 6. Task 4 - Lightweight model
-
-Task 4 là bước kế tiếp: huấn luyện mô hình nhẹ trên signal/window đã chuẩn hóa để kiểm tra mô hình học máy có vượt baseline truyền thống và fusion hay không.
-
-### Mục tiêu Task 4
-
-- Input chính: artifact từ Task 2 (`signals.npz`) và/hoặc Task 3 (`fusion_signals.npz`).
-- Dự đoán HR theo window, cùng timeline `hr_timestamps` và ground truth `gt_aligned_to_hr`.
-- So sánh với baseline:
-  - Green/CHROM/POS từ Task 2.
-  - `single_*`, `average_fusion`, `quality_weighted_fusion` từ Task 3.
-  - Các paper/baseline trong proposal như DeepPhys, PhysNet, TS-CAN, EfficientPhys chỉ được đưa vào bảng khi có artifact hoặc số liệu cùng protocol.
-- Ưu tiên mô hình nhẹ, dễ chạy, dễ giải thích: Tiny CNN, TCN, MLP/LightGBM trên feature nếu cần.
-
-### Tổ chức folder đề xuất
-
-```text
-notebooks/
-  04_lightweight_model.ipynb
-
-src/airppg/modeling/
-  __init__.py
-  config.py          # dataclass config
-  dataset.py         # đọc Task 2/3 artifact và tạo window dataset
-  features.py        # feature/window transforms nếu dùng tabular model
-  models.py          # TinyCNN, TCN, MLP nhỏ
-  train.py           # train/eval loop nhỏ, notebook-friendly
-  metrics.py         # wrapper metric nếu cần, ưu tiên reuse airppg.metrics
-  visualization.py   # loss curve, prediction-vs-GT, comparison chart
-
-outputs/modeling/
-  modeling_manifest.json
-  modeling_metrics_summary.csv
-  modeling_aggregate_summary.csv
-  train|val|test/
-    <sample_id>/
-      model_predictions.npz
-      model_metrics.json
-      model_metrics.csv
-      model_visualization.png
-  checkpoints/
-    <run_name>/
-      best_model.pt
-      training_history.csv
-      config.json
-
-report/
-  task4_lightweight_model_report.html
-  assets/
-    task4_*.png
-```
-
-### Input dataset cho Task 4
-
-Khuyến nghị tạo window-level dataset từ các signal đã có, không đọc lại raw video:
-
-| Nguồn | Key dùng | Ý nghĩa |
-| --- | --- | --- |
-| Task 2 `signals.npz` | `rppg_roi_signals` `(method, frame, roi)` | Per-ROI rPPG input. |
-| Task 2 `signals.npz` | `rppg_signals` `(frame, method)` | Baseline averaged ROI signal. |
-| Task 3 `fusion_signals.npz` | `average_fused_rppg_signals`, `weighted_fused_rppg_signals` | Fusion signals làm input hoặc baseline. |
-| Task 3 `fusion_signals.npz` | `roi_quality_features`, `roi_weights` | Feature phụ cho quality-aware model. |
-| Task 2/3 | `hr_timestamps`, `gt_aligned_to_hr` | Label và timeline window-level. |
-
-Window geometry phải giống Task 2/3:
-
-```text
-window_size = min(max(3, round(WINDOW_SEC * fps)), N)
-step_size = max(1, round(STEP_SEC * fps))
-starts = range(0, N - window_size + 1, step_size)
-```
-
-Không tự tạo split mới nếu không cần. Dùng split từ manifest Task 1/2/3: `train`, `val`, `test`.
-
-### Cách làm đề xuất
-
-1. **Dataset builder**
-   - Đọc `outputs/fusion/fusion_manifest.json` hoặc `outputs/signal_extraction/signal_extraction_dataset_manifest.json`.
-   - Chỉ lấy item `status == "processed"`.
-   - Với mỗi sample, tạo window input và label.
-   - Lưu manifest dataset nếu có preprocessing feature nặng.
-
-2. **Baseline trước khi train**
-   - Load metric Task 2/3 làm bảng baseline cố định.
-   - Không train model nếu chưa có baseline cùng split/protocol.
-
-3. **Model nhỏ trước**
-   - Tiny CNN 1D: input có shape gợi ý `(channels, window_size)`, channel có thể là ROI/method/fusion signal.
-   - TCN nhỏ: dùng khi cần temporal receptive field dài hơn.
-   - MLP/LightGBM: dùng với feature như SNR, dominant peak, ROI disagreement nếu muốn confidence/error prediction.
-
-4. **Training protocol**
-   - Train trên `train`, chọn checkpoint bằng `val`.
-   - Chỉ báo cáo kết quả cuối trên `test`.
-   - Lưu seed, config, model architecture, input channels, window length.
-   - Early stopping theo `val_mae_bpm` hoặc `val_rmse_bpm`.
-
-5. **Evaluation**
-   - Metric bắt buộc: MAE, RMSE, Pearson, bias, SNR nếu có reconstructed/predicted signal.
-   - So sánh cùng bảng với Task 2/3 baseline.
-   - Vẽ prediction vs ground truth theo sample đại diện.
-   - Vẽ bar chart test MAE/RMSE/Pearson giữa model và baseline.
-
-### Lưu ý quan trọng
-
-- Không leak data: mọi normalization học từ train phải fit trên train, apply cho val/test.
-- Không dùng test để chọn epoch, chọn architecture, hoặc tune threshold.
-- Không drop window lỗi âm thầm; nếu window không dùng được phải ghi lý do trong manifest hoặc metrics.
-- Không đổi `hr_timestamps` hoặc interpolate label nếu không ghi rõ.
-- Không so sánh với paper/baseline ngoài repo nếu khác dataset/protocol mà không ghi chú.
-- Mô hình nhẹ phải có số tham số, thời gian inference hoặc ít nhất nhận xét chi phí tính toán.
-- Nếu model không vượt baseline, vẫn báo cáo trung thực; kết quả âm vẫn có giá trị nghiên cứu.
-
-### Output bắt buộc Task 4
-
-```text
-outputs/modeling/
-  modeling_manifest.json
-  modeling_metrics_summary.csv
-  modeling_aggregate_summary.csv
-  checkpoints/<run_name>/
-    best_model.pt
-    training_history.csv
-    config.json
-  train|val|test/<sample_id>/
-    model_predictions.npz
-    model_metrics.json
-    model_metrics.csv
-    model_visualization.png
-```
-
-`model_predictions.npz` nên có:
-
-| Key | Shape | Ý nghĩa |
-| --- | --- | --- |
-| `schema_version` | scalar | Ví dụ `modeling_v1`. |
-| `sample_id`, `split`, `model_name` | scalar | Metadata. |
-| `hr_timestamps` | `(W,)` | Timeline window-level. |
-| `gt_aligned_to_hr` | `(W,)` | Ground truth HR. |
-| `predicted_hr` | `(W,)` hoặc `(W, K)` | HR dự đoán. |
-| `baseline_hr` | `(W, B)` | Baseline được so sánh nếu lưu kèm. |
-| `input_strategy_names` | `(C,)` | Tên input channel/strategy. |
-| `valid_windows` | `(W,)` | Window có dùng để tính metric hay không. |
-| `confidence` | `(W,)` optional | Nếu Task 4 thử confidence/error-aware output. |
-
-Report Task 4 bắt buộc đặt trong `report/`, dùng `report/report.css`, có giải thích metric, biểu đồ, bảng so sánh baseline, nhận xét dưới từng chart và kết luận cuối.
-
----
-
-## 7. Kiểm tra nhanh artifact hiện tại
-
-Sau khi chạy Task 2, kiểm tra Signal extraction manifest:
-
-```powershell
-uv run python -c "import json; from pathlib import Path; p=Path('outputs/signal_extraction/signal_extraction_dataset_manifest.json'); m=json.loads(p.read_text(encoding='utf-8')); print(m['counts'])"
-```
-
-Kiểm tra shape Task 2 của một sample:
-
-```powershell
-uv run python -c "import json, numpy as np; from pathlib import Path; root=Path('outputs/signal_extraction'); m=json.loads((root/'signal_extraction_dataset_manifest.json').read_text(encoding='utf-8')); item=next(i for i in m['items'] if i['status']=='processed'); data=np.load(root/item['outputs']['signals_npz']); print(data['mean_rgb'].shape, data['rppg_roi_signals'].shape, data['hr_estimates'].shape)"
-```
-
-Sau khi chạy Task 3, kiểm tra Fusion manifest và weight:
-
-```powershell
-uv run python -c "import json, numpy as np; from pathlib import Path; root=Path('outputs/fusion'); m=json.loads((root/'fusion_manifest.json').read_text(encoding='utf-8')); print(m['counts']); item=next(i for i in m['items'] if i['status']=='processed'); d=np.load(root/item['outputs']['fusion_npz']); w=d['roi_weights']; print(d['single_roi_hr'].shape, w.shape, np.allclose(w.sum(axis=2), 1.0))"
-```
-
----
-
-## 8. Ghi chú vận hành
-
-- Không commit dataset hoặc output lớn.
-- Không hardcode đường dẫn máy cá nhân vào notebook/script commit lên repo.
-- Preprocessing và Signal extraction phải giữ path tương đối trong manifest để dễ chuyển máy.
-- Nếu thay đổi schema output, cần tăng `schema_version` và cập nhật README tương ứng.
+## Project status
+
+| Stage | Status |
+|:---|:---|
+| ROI preprocessing and UBFC ground truth | **Implemented** |
+| Green / CHROM / POS and HR evaluation | **Implemented** |
+| Multi-ROI average and quality-weighted fusion | **Implemented** |
+| Lightweight learned model (e.g. 1D CNN / TCN) | **Planned — not trained in this repository** |
+| Confidence and reliability estimation | **Planned — not yet validated** |
+
+## Limitations
+
+- **Limited evaluation:** the current test split contains **five recordings**; the reported means do not include uncertainty intervals or statistical significance tests.
+- **Generalization remains open:** the current evaluation uses UBFC-rPPG. Real webcam conditions, demographics, lighting and movement require additional validation.
+- **Classical methods only:** DeepPhys, PhysNet, TS-CAN, EfficientPhys and small neural models are mentioned in planning materials but **have not been evaluated here**.
+- **Ground truth & protocol:** reference HR is aligned to prediction windows; results depend on the dataset, sampling/splitting policy, FFT windowing and spectral range.
+- **Not a medical device:** estimates are for research and education, not diagnosis, treatment or health monitoring decisions.
+
+## License
+
+Source code is available under the [MIT License](LICENSE). The **UBFC-rPPG dataset has its own terms** and is not licensed by this repository's MIT license.
