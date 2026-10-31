@@ -32,7 +32,7 @@ The research uses **UBFC-rPPG**, including both `DATASET_1` and `DATASET_2`. Ori
 
 ## Experimental results
 
-**Snapshot of the committed Task 3 experiment:** 49 processed recordings (**39 train / 5 validation / 5 test**), 0 failed across the preprocessing, signal-extraction, and fusion manifests. The test split contains **206 HR windows** across five recordings.
+**Snapshot of the committed fusion experiments:** 49 processed recordings (**39 train / 5 validation / 5 test**), 0 failed across the preprocessing, signal-extraction, and fusion manifests. The test split contains **206 HR windows** across five recordings.
 
 The table uses `outputs/fusion/fusion_aggregate_summary.csv`. MAE, RMSE, and Pearson `r` are **arithmetic means of the per-recording metrics**, not metrics recomputed after pooling every window across recordings.
 
@@ -49,7 +49,7 @@ The table uses `outputs/fusion/fusion_aggregate_summary.csv`. MAE, RMSE, and Pea
 
 <div align="center">
   <img src="report/assets/task3_test_mae.png" alt="Test-set MAE: single ROI versus fusion strategies for Green, CHROM and POS" width="90%" />
-  <sub>Test MAE comparison from the <a href="report/task3_fusion_report.html">Task 3 report</a>.</sub>
+  <sub>Test-set MAE comparison from the <a href="report/task3_fusion_report.html">fusion report</a>.</sub>
 </div>
 
 **What the results support**
@@ -57,11 +57,11 @@ The table uses `outputs/fusion/fusion_aggregate_summary.csv`. MAE, RMSE, and Pea
 1. **Average fusion helps Green and POS** compared with their best single-ROI alternatives on this test split. For Green, MAE decreases from 13.82 to 10.24 BPM.
 2. **POS is the strongest classical baseline in the current experiment.** Quality weighting changes test MAE only from 1.66 to 1.64 BPM relative to averaging. This very small improvement is **not evidence of a reliable general advantage**.
 3. **Hand-crafted quality weighting is not consistently beneficial.** It degrades Green versus simple averaging, and CHROM remains inaccurate under the current pipeline.
-4. The Task 2 `signal_extraction_baseline` **already averages ROI signals**. It is a reproduction/reference check, **not an independent single-ROI baseline**.
+4. The `signal_extraction_baseline` reference **already averages ROI signals**. It is a reproduction/reference check, **not an independent single-ROI baseline**.
 
 These are **results for this repository's UBFC split and protocol**, not performance guarantees for arbitrary webcams, motion, lighting, skin tones, or clinical use. Validation errors are substantially higher in parts of the experiment; see the full reports before drawing generalization claims.
 
-**Data:** [Fusion aggregate CSV](outputs/fusion/fusion_aggregate_summary.csv) · [Per-recording fusion metrics](outputs/fusion/fusion_metrics_summary.csv) · [Task 2 metrics](outputs/signal_extraction/signal_extraction_metrics_summary.csv)
+**Data:** [Fusion aggregate CSV](outputs/fusion/fusion_aggregate_summary.csv) · [Per-recording fusion metrics](outputs/fusion/fusion_metrics_summary.csv) · [Classical baseline metrics](outputs/signal_extraction/signal_extraction_metrics_summary.csv)
 
 ## Methodology
 
@@ -69,17 +69,17 @@ These are **results for this repository's UBFC split and protocol**, not perform
 UBFC-rPPG RGB videos + reference heart rate
                  |
                  v
-1. Preprocessing (01_preprocessing.ipynb)
+Facial preprocessing (01_preprocessing.ipynb)
    MediaPipe Face Mesh -> forehead / cheeks -> ROI masks
    Frame validity + timestamps + normalized ground truth
                  |
                  v
-2. Signal extraction (02_signal_extraction.ipynb)
+Pulse signal extraction (02_signal_extraction.ipynb)
    ROI mean RGB -> detrend / band-pass -> Green / CHROM / POS
    Sliding-window FFT -> predicted HR -> aligned ground truth
                  |
                  v
-3. Multi-ROI fusion (03_fusion.ipynb)
+Multi-region fusion (03_fusion.ipynb)
    Single ROI | Average fusion | Quality-weighted fusion
    Quality features, ROI weights, fused HR, evaluation
                  |
@@ -87,13 +87,13 @@ UBFC-rPPG RGB videos + reference heart rate
    CSV/JSON/NPZ artifacts + visualizations + HTML reports
 ```
 
-### 1. Preprocessing
+### Facial ROI extraction
 
 The first notebook reads video metadata and uses **MediaPipe Face Mesh** to locate facial landmarks. Three predefined polygons are converted into pixel masks. Processed frames preserve their original frame indices; invalid frames are recorded with validity flags and failure reasons instead of being silently dropped. Ground truth is normalized separately for UBFC `DATASET_1` and `DATASET_2`.
 
 **Output:** `outputs/preprocessing/preprocessing_dataset_manifest.json`, per-sample `roi_data.npz`, `metadata.json`, `ground_truth.npz` and ROI overlays.
 
-### 2. Classical rPPG extraction
+### Pulse signal and heart-rate estimation
 
 Each valid ROI produces a mean RGB trace. The pipeline interpolates missing signal values when needed, detrends, band-pass filters, and evaluates three classical methods:
 
@@ -107,9 +107,9 @@ Heart rate is estimated using the dominant spectral peak in sliding FFT windows 
 
 **Configured experiment:** 30-second windows, 1-second step, 42–210 BPM search range. **Output:** `outputs/signal_extraction/signal_extraction_dataset_manifest.json` and per-sample signals/metrics.
 
-### 3. Multi-ROI fusion
+### Multi-region fusion
 
-Fusion consumes **Task 2 artifacts**, so it does not need to process raw videos a second time. It compares:
+Fusion consumes **saved signal-extraction artifacts**, so it does not need to process raw videos a second time. It compares:
 
 - **Single ROI:** independent HR from forehead, left cheek and right cheek.
 - **Average fusion:** equal-weight averaging of the three ROI signals.
@@ -125,15 +125,15 @@ The repository includes two detailed **HTML experiment reports**. Download or op
 
 | Report | Contents |
 |:---|:---|
-| **[Task 2 — Signal Extraction & Classical Baselines](report/task2_signal_extraction_report.html)** | Green/CHROM/POS, train/validation/test metrics, MAE/RMSE/Pearson/SNR interpretation and failure discussion |
-| **[Task 3 — Multi-ROI Fusion](report/task3_fusion_report.html)** | Single-region vs average vs quality-weighted strategies, ROI weight behavior, test comparison and limitations |
+| **[Signal Extraction & Classical Baselines](report/task2_signal_extraction_report.html)** | Green/CHROM/POS, train/validation/test metrics, MAE/RMSE/Pearson/SNR interpretation and failure discussion |
+| **[Multi-ROI Fusion](report/task3_fusion_report.html)** | Single-region vs average vs quality-weighted strategies, ROI weight behavior, test comparison and limitations |
 
 <div align="center">
-  <img src="report/assets/task2_test_baselines.png" alt="Task 2 classical rPPG baseline comparison on test recordings" width="48%" />
-  <img src="report/assets/task3_test_rmse_pearson.png" alt="Task 3 test RMSE and Pearson correlation comparisons" width="48%" />
+  <img src="report/assets/task2_test_baselines.png" alt="Classical rPPG baseline comparison on test recordings" width="48%" />
+  <img src="report/assets/task3_test_rmse_pearson.png" alt="Fusion comparison: test RMSE and Pearson correlation" width="48%" />
 </div>
 
-Additional artifacts: [Task 2 MAE by split](report/assets/task2_mae_by_split.png) · [Example HR traces and ROI weights](report/assets/task3_sample_visualization.png) · [Research plan](docs/task.md) · [Research proposal](docs/rppg_research_proposal.docx)
+Additional artifacts: [Baseline MAE by split](report/assets/task2_mae_by_split.png) · [Example HR traces and ROI weights](report/assets/task3_sample_visualization.png) · [Research plan](docs/task.md) · [Research proposal](docs/rppg_research_proposal.docx)
 
 ## Getting started
 
@@ -141,7 +141,7 @@ Additional artifacts: [Task 2 MAE by split](report/assets/task2_mae_by_split.png
 
 - **Python 3.11** (required by `pyproject.toml`; the project specifies `>=3.11,<3.12`).
 - [`uv`](https://docs.astral.sh/uv/) for dependency and environment management.
-- [UBFC-rPPG](https://sites.google.com/view/ybenezeth/ubfcrppg) videos and reference signals for rerunning Task 1 and Task 2.
+- [UBFC-rPPG](https://sites.google.com/view/ybenezeth/ubfcrppg) videos and reference signals for preprocessing and signal extraction.
 
 ### Install and test
 
@@ -178,13 +178,13 @@ datasets/UBFC_DATASET/
 
 Other recording folders follow the same layouts. The preprocessing notebook discovers videos recursively. Keep dataset files on your local machine and comply with the dataset provider's terms.
 
-### Run the notebooks in order
+### Reproduce the experiments
 
 1. [`01_preprocessing.ipynb`](notebooks/01_preprocessing.ipynb) — face landmarks, ROI masks and normalized reference data.
 2. [`02_signal_extraction.ipynb`](notebooks/02_signal_extraction.ipynb) — mean RGB, Green/CHROM/POS, sliding-window HR and metrics.
 3. [`03_fusion.ipynb`](notebooks/03_fusion.ipynb) — single ROI and fusion experiments, metrics and figures.
 
-The notebooks locate the repository root and add `src/` to the Python import path. They write versioned manifests with relative paths so that later stages can consume earlier artifacts. **Task 2 requires access to original videos** for RGB extraction; **Task 3 can run from the saved Task 2 artifacts**.
+The notebooks locate the repository root and add `src/` to the Python import path. They write versioned manifests with relative paths so that later stages can consume earlier artifacts. **RGB extraction requires access to the original videos**; the fusion analysis can run directly from saved signal-extraction artifacts.
 
 Some generated experimental artifacts are already committed under `outputs/`; this makes the repository relatively large. Re-running the earlier notebooks may replace generated outputs.
 
@@ -209,19 +209,13 @@ src/airppg/fusion/           ROI quality, strategies and evaluation
 src/airppg/signal.py         Signal processing and HR estimation
 src/airppg/metrics.py        Ground-truth alignment and metrics
 outputs/                     Versioned manifests and generated artifacts
-report/                      Task 2/3 HTML reports and figures
+report/                      Experiment reports and figures
 tests/                       Unit tests on synthetic fixtures
 ```
 
-## Project status
+## Research scope
 
-| Stage | Status |
-|:---|:---|
-| ROI preprocessing and UBFC ground truth | **Implemented** |
-| Green / CHROM / POS and HR evaluation | **Implemented** |
-| Multi-ROI average and quality-weighted fusion | **Implemented** |
-| Lightweight learned model (e.g. 1D CNN / TCN) | **Planned — not trained in this repository** |
-| Confidence and reliability estimation | **Planned — not yet validated** |
+The current repository contains an experimental pipeline for facial ROI extraction, classical rPPG signal processing, and multi-region fusion with reproducible result artifacts. Lightweight learned models and confidence estimation are potential follow-up research directions; no trained neural HR estimator or validated confidence model is included.
 
 ## Limitations
 
